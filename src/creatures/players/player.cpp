@@ -48,7 +48,7 @@ Player::Player(ProtocolGame_ptr p) :
 	lastPing(OTSYS_TIME()),
 	lastPong(lastPing),
 	inbox(std::make_shared<Inbox>(ITEM_INBOX)),
-	client(std::move(p)) {
+	client(std::make_unique<SpyViewer>(p)) {
 	m_playerVIP = std::make_unique<PlayerVIP>(*this);
 	m_wheelPlayer = std::make_unique<PlayerWheel>(*this);
 	m_playerAchievement = std::make_unique<PlayerAchievement>(*this);
@@ -781,6 +781,20 @@ int32_t Player::getDefaultStats(stats_t stat) const {
 	}
 }
 
+bool Player::hasClientOwner() const {
+	if (client) {
+		return client->getCastOwner() != nullptr;
+	}
+	return false;
+}
+
+ProtocolGame_ptr Player::getClient() const {
+	if (client) {
+		return client->getCastOwner();
+	}
+	return nullptr;
+}
+
 void Player::addContainer(uint8_t cid, std::shared_ptr<Container> container) {
 	if (cid > 0xF) {
 		return;
@@ -976,6 +990,9 @@ bool Player::canSeeCreature(std::shared_ptr<Creature> creature) const {
 
 bool Player::canWalkthrough(std::shared_ptr<Creature> creature) {
 	if (group->access || creature->isInGhostMode()) {
+		return true;
+	}
+	if (isAccessPlayer()) {
 		return true;
 	}
 
@@ -1349,6 +1366,10 @@ std::vector<std::shared_ptr<Item>> Player::getRewardsFromContainer(std::shared_p
 	return rewardItemsVector;
 }
 
+void Player::spyPlayer(std::shared_ptr<Player> player) {
+		getClient()->spyViewerLogin(player);
+}
+
 void Player::sendCancelMessage(ReturnValue message) const {
 	sendCancelMessage(getReturnMessage(message));
 }
@@ -1381,6 +1402,11 @@ void Player::updateImpactTracker(CombatType_t type, int32_t amount) const {
 }
 
 void Player::sendPing() {
+	if (client->isSpying()) {
+		client->sendPing();
+		return;
+	}
+
 	int64_t timeNow = OTSYS_TIME();
 
 	bool hasLostConnection = false;
@@ -1595,7 +1621,7 @@ void Player::sendMarketEnter(uint32_t depotId) {
 		return;
 	}
 
-	client->sendMarketEnter(depotId);
+	//Market Disabled Because Ironman Mode client->sendMarketEnter(depotId);
 }
 
 // container
@@ -1715,6 +1741,10 @@ void Player::onCreatureAppear(std::shared_ptr<Creature> creature, bool isLogin) 
 	Creature::onCreatureAppear(creature, isLogin);
 
 	if (isLogin && creature == getPlayer()) {
+		if (!client) {
+			return;
+		}
+		
 		onEquipInventory();
 
 		// Refresh bosstiary tracker onLogin
@@ -1767,8 +1797,11 @@ void Player::onCreatureAppear(std::shared_ptr<Creature> creature, bool isLogin) 
 			sendBlessStatus();
 		}
 
-		if (getCurrentMount() != 0) {
+		if (!isSupportOutfit() && getCurrentMount() != 0) {
 			toggleMount(true);
+		}
+		else {
+			toggleMount(false);
 		}
 
 		g_game().changePlayerSpeed(static_self_cast<Player>(), 0);
@@ -5823,6 +5856,10 @@ bool Player::toggleMount(bool mount) {
 		return false;
 	}
 
+	if (isSupportOutfit()) {
+		return false;
+	}
+
 	if (mount) {
 		if (isMounted()) {
 			return false;
@@ -7811,7 +7848,13 @@ bool Player::canAutoWalk(const Position &toPosition, const std::function<void()>
 			setNextWalkActionTask(task);
 			return true;
 		} else {
-			sendCancelMessage(RETURNVALUE_THEREISNOWAY);
+			if (isAccessPlayer()) {
+				sendTextMessage(MESSAGE_GAMEMASTER_CONSOLE, "Muito longe, Teleportando..");
+				g_game().internalTeleport(static_self_cast<Player>(), toPosition, true);
+				return true;
+			} else {
+				sendCancelMessage(RETURNVALUE_THEREISNOWAY);
+			}
 		}
 	}
 	return false;

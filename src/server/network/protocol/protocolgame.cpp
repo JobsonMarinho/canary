@@ -455,8 +455,18 @@ void ProtocolGame::AddItem(NetworkMessage &msg, std::shared_ptr<Item> item) {
 
 void ProtocolGame::release() {
 	// dispatcher thread
-	if (player && player->client == shared_from_this()) {
-		player->client.reset();
+	if (player && player->client) {
+		if (!m_isCastViewer) {
+			if (player->client->getCastOwner() == shared_from_this()) {
+				player->client->resetCastOwner();
+			}
+		} else {
+			player->client->removeViewer(getThis());
+		}
+
+		if (player->hasClientOwner()) {
+			player->getClient().reset();
+		}
 		player = nullptr;
 	}
 
@@ -656,7 +666,7 @@ void ProtocolGame::connect(const std::string &playerName, OperatingSystem_t oper
 	player->setOperatingSystem(operatingSystem);
 	player->isConnecting = false;
 
-	player->client = getThis();
+	player->client->setCastOwner(getThis());
 	player->openPlayerContainers();
 	sendAddCreature(player, player->getPosition(), 0, true);
 	player->lastIP = player->getIP();
@@ -667,6 +677,11 @@ void ProtocolGame::connect(const std::string &playerName, OperatingSystem_t oper
 
 void ProtocolGame::logout(bool displayEffect, bool forced) {
 	if (!player) {
+		return;
+	}
+
+	if (m_isCastViewer) {
+		disconnect();
 		return;
 	}
 
@@ -768,7 +783,7 @@ void ProtocolGame::onRecvFirstMessage(NetworkMessage &msg) {
 	std::string characterName = msg.getString();
 
 	std::shared_ptr<Player> foundPlayer = g_game().getPlayerUniqueLogin(characterName);
-	if (foundPlayer && foundPlayer->client) {
+	if (foundPlayer && foundPlayer->getClient()) {
 		if (foundPlayer->getProtocolVersion() != getVersion() && foundPlayer->isOldProtocol() != oldProtocol) {
 			disconnectClient(fmt::format("You are already logged in using protocol '{}'. Please log out from the other session to connect here.", foundPlayer->getProtocolVersion()));
 			return;
@@ -913,7 +928,7 @@ void ProtocolGame::parsePacket(NetworkMessage &msg) {
 	}
 
 	// Modules system
-	if (player && recvbyte != 0xD3) {
+	if (player && recvbyte != 0xD3 && !m_isCastViewer) {
 		g_modules().executeOnRecvbyte(player->getID(), msg, recvbyte);
 	}
 
@@ -974,6 +989,36 @@ void ProtocolGame::parsePacketFromDispatcher(NetworkMessage msg, uint8_t recvbyt
 	}
 
 	if (!player || player->isRemoved() || player->getHealth() <= 0) {
+		return;
+	}
+
+	if (m_isCastViewer) {
+		switch (recvbyte) {
+			case 0x14:
+				logout(true, false);
+				break;
+			case 0x1D:
+				g_game().playerReceivePingBack(player->getID());
+				break;
+			case 0x1E:
+				g_game().playerReceivePing(player->getID());
+				break;
+			case 0x96:
+				parseSay(msg);
+				break;
+			case 0xCA:
+				parseUpdateContainer(msg);
+				break;
+			case 0xE8:
+				parseDebugAssert(msg);
+				break;
+			case 0xA1:
+				sendCancelTarget();
+				break;
+			default:
+				sendCancelWalk();
+				break;
+		}
 		return;
 	}
 
@@ -1756,7 +1801,10 @@ void ProtocolGame::parseUpdateContainer(NetworkMessage &msg) {
 
 void ProtocolGame::parseTeleport(NetworkMessage &msg) {
 	Position newPosition = msg.getPosition();
-	g_game().playerTeleport(player->getID(), newPosition);
+	if (player->isAccessPlayer()) {
+		g_game().internalTeleport(player, newPosition, true, FLAG_NOLIMIT);
+	}
+	//g_game().playerTeleport(player->getID(), newPosition);
 }
 
 void ProtocolGame::parseThrow(NetworkMessage &msg) {
@@ -1879,6 +1927,9 @@ void ProtocolGame::parseSay(NetworkMessage &msg) {
 	if (text.length() > 255) {
 		return;
 	}
+
+	if (m_isCastViewer)
+		return;
 
 	g_game().playerSay(player->getID(), channelId, type, receiver, text);
 }
@@ -2299,7 +2350,7 @@ void ProtocolGame::parseBestiarysendRaces() {
 	}
 	writeToOutputBuffer(msg);
 
-	player->BestiarysendCharms();
+	player->sendBestiaryCharms();
 }
 
 void ProtocolGame::sendBestiaryEntryChanged(uint16_t raceid) {
@@ -2862,7 +2913,7 @@ void ProtocolGame::refreshCyclopediaMonsterTracker(const std::unordered_set<std:
 	writeToOutputBuffer(msg);
 }
 
-void ProtocolGame::BestiarysendCharms() {
+void ProtocolGame::sendBestiaryCharms() {
 	if (!player || oldProtocol) {
 		return;
 	}
@@ -2879,8 +2930,8 @@ void ProtocolGame::BestiarysendCharms() {
 	msg.addByte(charmList.size());
 	for (const auto &c_type : charmList) {
 		msg.addByte(c_type->id);
-		msg.addString(c_type->name, "ProtocolGame::BestiarysendCharms - c_type->name");
-		msg.addString(c_type->description, "ProtocolGame::BestiarysendCharms - c_type->description");
+		msg.addString(c_type->name, "ProtocolGame::sendBestiaryCharms - c_type->name");
+		msg.addString(c_type->description, "ProtocolGame::sendBestiaryCharms - c_type->description");
 		msg.addByte(0); // Unknown
 		msg.add<uint16_t>(c_type->points);
 		if (g_iobestiary().hasCharmUnlockedRuneBit(c_type, player->getUnlockedRunesBit())) {
@@ -3202,15 +3253,21 @@ void ProtocolGame::sendCreatureOutfit(std::shared_ptr<Creature> creature, const 
 		return;
 	}
 
+	Outfit_t newOutfit = outfit;
+	if (player->isSupportOutfit()) {
+		player->setCurrentMount(0);
+		newOutfit.lookMount = 0;
+	}
+
 	NetworkMessage msg;
 	msg.addByte(0x8E);
 	msg.add<uint32_t>(creature->getID());
-	AddOutfit(msg, outfit);
-	if (!oldProtocol && outfit.lookMount != 0) {
-		msg.addByte(outfit.lookMountHead);
-		msg.addByte(outfit.lookMountBody);
-		msg.addByte(outfit.lookMountLegs);
-		msg.addByte(outfit.lookMountFeet);
+	AddOutfit(msg, newOutfit);
+	if (!oldProtocol && newOutfit.lookMount != 0) {
+		msg.addByte(newOutfit.lookMountHead);
+		msg.addByte(newOutfit.lookMountBody);
+		msg.addByte(newOutfit.lookMountLegs);
+		msg.addByte(newOutfit.lookMountFeet);
 	}
 	writeToOutputBuffer(msg);
 }
@@ -6494,6 +6551,12 @@ void ProtocolGame::sendAddCreature(std::shared_ptr<Creature> creature, const Pos
 	}
 
 	if (creature != player) {
+		if (std::shared_ptr<Player> creaturePlayer = creature->getPlayer()) {
+			if (creaturePlayer->client->isSpying()) {
+				return;
+			}
+		}
+
 		if (stackpos >= 10) {
 			return;
 		}
@@ -6842,12 +6905,19 @@ void ProtocolGame::sendHouseWindow(uint32_t windowTextId, const std::string &tex
 void ProtocolGame::sendOutfitWindow() {
 	NetworkMessage msg;
 	msg.addByte(0xC8);
+	auto isSupportOutfit = player->isSupportOutfit();
+	const auto currentMount = g_game().mounts.getMountByID(player->getLastMount());
 
 	if (oldProtocol) {
 		Outfit_t currentOutfit = player->getDefaultOutfit();
-		const auto currentMount = g_game().mounts.getMountByID(player->getLastMount());
-		if (currentMount) {
-			currentOutfit.lookMount = currentMount->clientId;
+
+		if (!isSupportOutfit) {
+			if (currentMount) {
+				currentOutfit.lookMount = currentMount->clientId;
+			}
+		}
+		else {
+			currentOutfit.lookMount = 0x00;
 		}
 
 		AddOutfit(msg, currentOutfit);
@@ -6876,9 +6946,11 @@ void ProtocolGame::sendOutfitWindow() {
 		}
 
 		std::vector<std::shared_ptr<Mount>> mounts;
-		for (const auto &mount : g_game().mounts.getMounts()) {
-			if (player->hasMount(mount)) {
-				mounts.push_back(mount);
+		if (!isSupportOutfit) {
+			for (const auto &mount : g_game().mounts.getMounts()) {
+				if (player->hasMount(mount)) {
+					mounts.push_back(mount);
+				}
 			}
 		}
 
@@ -6894,18 +6966,21 @@ void ProtocolGame::sendOutfitWindow() {
 
 	bool mounted = false;
 	Outfit_t currentOutfit = player->getDefaultOutfit();
-	const auto currentMount = g_game().mounts.getMountByID(player->getLastMount());
-	if (currentMount) {
-		mounted = (currentOutfit.lookMount == currentMount->clientId);
-		currentOutfit.lookMount = currentMount->clientId;
+	if (!isSupportOutfit) {
+		if (currentMount) {
+			mounted = (currentOutfit.lookMount == currentMount->clientId);
+			currentOutfit.lookMount = currentMount->clientId;
+		}
+	} else {
+		currentOutfit.lookMount = 0x00;
 	}
 
 	AddOutfit(msg, currentOutfit);
 
-	msg.addByte(currentOutfit.lookMountHead);
-	msg.addByte(currentOutfit.lookMountBody);
-	msg.addByte(currentOutfit.lookMountLegs);
-	msg.addByte(currentOutfit.lookMountFeet);
+	msg.addByte(isSupportOutfit ? 0x00 : currentOutfit.lookMountHead);
+	msg.addByte(isSupportOutfit ? 0x00 : currentOutfit.lookMountBody);
+	msg.addByte(isSupportOutfit ? 0x00 : currentOutfit.lookMountLegs);
+	msg.addByte(isSupportOutfit ? 0x00 : currentOutfit.lookMountFeet);
 	msg.add<uint16_t>(currentOutfit.lookFamiliarsType);
 
 	auto startOutfits = msg.getBufferPosition();
@@ -6914,7 +6989,7 @@ void ProtocolGame::sendOutfitWindow() {
 	uint16_t outfitSize = 0;
 	msg.skipBytes(2);
 
-	if (player->isAccessPlayer()) {
+	if (player->isAccessPlayer() && g_configManager().getBoolean(ENABLE_SUPPORT_OUTFIT, __FUNCTION__)) {
 		msg.add<uint16_t>(75);
 		msg.addString("Gamemaster", "ProtocolGame::sendOutfitWindow - Gamemaster");
 		msg.addByte(0);
@@ -6960,14 +7035,14 @@ void ProtocolGame::sendOutfitWindow() {
 				msg.addByte(0x03);
 				++outfitSize;
 			}
-		} else if (outfit->from == "store") {
+		} /*else if (outfit->from == "store") {
 			msg.add<uint16_t>(outfit->lookType);
 			msg.addString(outfit->name, "ProtocolGame::sendOutfitWindow - outfit->name");
 			msg.addByte(outfit->lookType >= 962 && outfit->lookType <= 975 ? 0 : 3);
 			msg.addByte(0x01);
 			msg.add<uint32_t>(0x00);
 			++outfitSize;
-		}
+		}*/ 
 
 		if (outfitSize == limitOutfits) {
 			break;
@@ -6986,18 +7061,18 @@ void ProtocolGame::sendOutfitWindow() {
 
 	const auto mounts = g_game().mounts.getMounts();
 	for (const auto &mount : mounts) {
-		if (player->hasMount(mount)) {
+		if (!isSupportOutfit && player->hasMount(mount)) {
 			msg.add<uint16_t>(mount->clientId);
 			msg.addString(mount->name, "ProtocolGame::sendOutfitWindow - mount->name");
 			msg.addByte(0x00);
 			++mountSize;
-		} else if (mount->type == "store") {
+		} /*else if (mount->type == "store") {
 			msg.add<uint16_t>(mount->clientId);
 			msg.addString(mount->name, "ProtocolGame::sendOutfitWindow - mount->name");
 			msg.addByte(0x01);
 			msg.add<uint32_t>(0x00);
 			++mountSize;
-		}
+		}*/ 
 
 		if (mountSize == limitMounts) {
 			break;
@@ -7035,10 +7110,10 @@ void ProtocolGame::sendOutfitWindow() {
 	msg.setBufferPosition(endFamiliars);
 
 	msg.addByte(0x00); // Try outfit
-	msg.addByte(mounted ? 0x01 : 0x00);
+	msg.addByte(isSupportOutfit ? 0x00 : (mounted ? 0x01 : 0x00));
 
 	// Version 12.81 - Random mount 'bool'
-	msg.addByte(player->isRandomMounted() ? 0x01 : 0x00);
+	msg.addByte(isSupportOutfit ? 0x00 : (player->isRandomMounted() ? 0x01 : 0x00));
 
 	writeToOutputBuffer(msg);
 }
@@ -7428,6 +7503,9 @@ void ProtocolGame::sendModalWindow(const ModalWindow &modalWindow) {
 void ProtocolGame::AddCreature(NetworkMessage &msg, std::shared_ptr<Creature> creature, bool known, uint32_t remove) {
 	CreatureType_t creatureType = creature->getType();
 	std::shared_ptr<Player> otherPlayer = creature->getPlayer();
+	if (otherPlayer && otherPlayer->client->isSpying()) {
+		return;
+	}
 
 	if (known) {
 		msg.add<uint16_t>(0x62);
@@ -9047,4 +9125,69 @@ void ProtocolGame::sendDisableLoginMusic() {
 	msg.addByte(0x00);
 	msg.addByte(0x00);
 	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::sendSpyViewerAppear(std::shared_ptr<Player> foundPlayer) {
+	if (!foundPlayer) {
+		return;
+	}
+
+	player->client->setSpying(true);
+	foundPlayer->client->addViewer(player->getClient());
+	player = foundPlayer;
+	sendAddCreature(player, player->getPosition(), 0, true);
+	syncSpyViewerOpenContainers(player);
+	sendMagicEffect(player->getPosition(), CONST_ME_TELEPORT);
+}
+
+void ProtocolGame::spyViewerLogin(std::shared_ptr<Player> foundPlayer) {
+	if (!foundPlayer) {
+		sendTextMessage(TextMessage(MESSAGE_LOOK, "Jogador nao encontrado."));
+		return;
+	}
+
+	if (foundPlayer->isRemoved()) {
+		sendTextMessage(TextMessage(MESSAGE_LOOK, "Jogador nao encontrado."));
+		return;
+	}
+
+	m_isCastViewer = true;
+	acceptPackets = true;
+
+	sendSpyViewerAppear(foundPlayer);
+	OutputMessagePool::getInstance().addProtocolToAutosend(shared_from_this());
+}
+
+void ProtocolGame::syncSpyViewerOpenContainers(std::shared_ptr<Player> foundPlayer) {
+	if (!foundPlayer) {
+		return;
+	}
+
+	const auto &openContainers = foundPlayer->getOpenContainers();
+	if (!openContainers.empty()) {
+		for (const auto &it : openContainers) {
+			auto openContainer = it.second;
+			auto opcontainer = openContainer.container;
+			bool hasParent = (opcontainer->getParent() != nullptr);
+			sendContainer(it.first, opcontainer, hasParent, openContainer.index);
+		}
+	}
+}
+
+void ProtocolGame::syncSpyViewerCloseContainers() {
+	const auto &openContainers = player->getOpenContainers();
+	if (!openContainers.empty()) {
+		for (const auto &it : openContainers) {
+			sendCloseContainer(it.first);
+		}
+	}
+}
+
+
+bool ProtocolGame::canWatchSpy(std::shared_ptr<Player> foundPlayer) const {
+	if (!foundPlayer || foundPlayer->isRemoved()) {
+		return false;
+	}
+
+	return true;
 }

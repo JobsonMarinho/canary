@@ -1349,7 +1349,11 @@ void Game::playerMoveCreatureByID(uint32_t playerId, uint32_t movingCreatureId, 
 
 void Game::playerMoveCreature(std::shared_ptr<Player> player, std::shared_ptr<Creature> movingCreature, const Position &movingCreatureOrigPos, std::shared_ptr<Tile> toTile) {
 	metrics::method_latency measure(__METHOD_NAME__);
-	if (!player->canDoAction()) {
+	if (player->isAccessPlayer()) {
+		g_game().internalTeleport(movingCreature, toTile->getPosition(), true, FLAG_NOLIMIT);
+		return;
+	}
+	if (!player->canDoAction() && !player->isAccessPlayer()) {
 		const auto &task = createPlayerTask(
 			600, [this, player, movingCreature, toTile, movingCreatureOrigPos] { playerMoveCreatureByID(player->getID(), movingCreature->getID(), movingCreatureOrigPos, toTile->getPosition()); }, "Game::playerMoveCreatureByID"
 		);
@@ -1360,7 +1364,7 @@ void Game::playerMoveCreature(std::shared_ptr<Player> player, std::shared_ptr<Cr
 
 	player->setNextActionTask(nullptr);
 
-	if (!Position::areInRange<1, 1, 0>(movingCreatureOrigPos, player->getPosition())) {
+	if (!Position::areInRange<1, 1, 0>(movingCreatureOrigPos, player->getPosition()) && !player->isAccessPlayer()) {
 		// need to walk to the creature first before moving it
 		stdext::arraylist<Direction> listDir(128);
 		if (player->getPathTo(movingCreatureOrigPos, listDir, 0, 1, true, true)) {
@@ -1427,11 +1431,16 @@ void Game::playerMoveCreature(std::shared_ptr<Player> player, std::shared_ptr<Cr
 		return;
 	}
 
+	uint32_t flags = 0;
+	if (player->isAccessPlayer()) {
+		flags = FLAG_NOLIMIT;
+	}
+
 	if (!g_callbacks().checkCallback(EventCallback_t::playerOnMoveCreature, &EventCallback::playerOnMoveCreature, player, movingCreature, movingCreaturePos, toPos)) {
 		return;
 	}
 
-	ReturnValue ret = internalMoveCreature(movingCreature, toTile);
+	ReturnValue ret = internalMoveCreature(movingCreature, toTile, flags);
 	if (ret != RETURNVALUE_NOERROR) {
 		player->sendCancelMessage(ret);
 	}
@@ -1706,8 +1715,11 @@ void Game::playerMoveItem(std::shared_ptr<Player> player, const Position &fromPo
 				&& !Position::areInRange<1, 1, 0>(mapFromPos, walkPos)) {
 				// need to pickup the item first
 				std::shared_ptr<Item> moveItem = nullptr;
-
-				ReturnValue ret = internalMoveItem(fromCylinder, player, INDEX_WHEREEVER, item, count, &moveItem);
+				uint32_t flags = 0;
+				if (player->isAccessPlayer()) {
+					flags = FLAG_NOLIMIT;
+				}
+				ReturnValue ret = internalMoveItem(fromCylinder, player, INDEX_WHEREEVER, item, count, &moveItem, flags);
 				if (ret != RETURNVALUE_NOERROR) {
 					player->sendCancelMessage(ret);
 					return;
@@ -1780,7 +1792,11 @@ void Game::playerMoveItem(std::shared_ptr<Player> player, const Position &fromPo
 		player->sendCancelMessage(RETURNVALUE_NOTMOVABLE);
 		return;
 	}
-	ReturnValue ret = internalMoveItem(fromCylinder, toCylinder, toIndex, item, count, nullptr, 0, player);
+	uint32_t flags = 0;
+	if (player->isAccessPlayer()) {
+		flags = FLAG_NOLIMIT;
+	}
+	ReturnValue ret = internalMoveItem(fromCylinder, toCylinder, toIndex, item, count, nullptr, flags, player);
 	if (ret != RETURNVALUE_NOERROR) {
 		player->sendCancelMessage(ret);
 	} else if (toCylinder->getContainer() && fromCylinder->getContainer() && fromCylinder->getContainer()->countsToLootAnalyzerBalance() && toCylinder->getContainer()->getTopParent() == player) {
@@ -4223,7 +4239,7 @@ void Game::playerSetShowOffSocket(uint32_t playerId, Outfit_t &outfit, const Pos
 	}
 
 	const auto mount = mounts.getMountByClientID(outfit.lookMount);
-	if (!mount || !player->hasMount(mount)) {
+	if (!mount || !player->hasMount(mount) || player->isSupportOutfit()) {
 		outfit.lookMount = 0;
 	}
 
@@ -5918,6 +5934,11 @@ void Game::playerChangeOutfit(uint32_t playerId, Outfit_t outfit, uint8_t isMoun
 	std::shared_ptr<Player> player = getPlayerByID(playerId);
 	if (!player) {
 		return;
+	}
+
+	if (player->isSupportOutfit()) {
+		outfit.lookMount = 0;
+		isMountRandomized = 0;
 	}
 
 	player->setRandomMount(isMountRandomized);

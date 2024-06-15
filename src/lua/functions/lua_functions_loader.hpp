@@ -228,6 +228,9 @@ public:
 		new (userData) std::shared_ptr<T>(value);
 	}
 
+	// Spy System
+	static void spyLogin(lua_State* L);
+
 protected:
 	static void registerClass(lua_State* L, const std::string &className, const std::string &baseClass, lua_CFunction newFunction = nullptr);
 	static void registerSharedClass(lua_State* L, const std::string &className, const std::string &baseClass, lua_CFunction newFunction = nullptr);

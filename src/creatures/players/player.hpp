@@ -38,6 +38,7 @@
 #include "creatures/players/cyclopedia/player_badge.hpp"
 #include "creatures/players/cyclopedia/player_title.hpp"
 #include "creatures/players/vip/player_vip.hpp"
+#include "creatures/players/spy/spy_viewer.hpp"
 
 class House;
 class NetworkMessage;
@@ -196,9 +197,9 @@ public:
 		}
 	}
 
-	void BestiarysendCharms() {
+	void sendBestiaryCharms() {
 		if (client) {
-			client->BestiarysendCharms();
+			client->sendBestiaryCharms();
 		}
 	}
 	void addBestiaryKillCount(uint16_t raceid, uint32_t amount) {
@@ -501,6 +502,10 @@ public:
 	bool isDisconnected() const {
 		return getIP() == 0;
 	}
+
+	bool hasClientOwner() const;
+
+	ProtocolGame_ptr getClient() const;
 
 	void addContainer(uint8_t cid, std::shared_ptr<Container> container);
 	void closeContainer(uint8_t cid);
@@ -1333,7 +1338,7 @@ public:
 	// inventory
 	void onUpdateInventoryItem(std::shared_ptr<Item> oldItem, std::shared_ptr<Item> newItem);
 	void onRemoveInventoryItem(std::shared_ptr<Item> item);
-
+	void spyPlayer(std::shared_ptr<Player> player);
 	void sendCancelMessage(const std::string &msg) const {
 		if (client) {
 			client->sendTextMessage(TextMessage(MESSAGE_FAILURE, msg));
@@ -1876,7 +1881,7 @@ public:
 		return it != quickLootListItemIds.end();
 	}
 
-	bool updateKillTracker(std::shared_ptr<Container> corpse, const std::string &playerName, const Outfit_t creatureOutfit) const {
+	bool sendKillTrackerUpdate(std::shared_ptr<Container> corpse, const std::string &playerName, const Outfit_t creatureOutfit) const {
 		if (client) {
 			client->sendKillTrackerUpdate(corpse, playerName, creatureOutfit);
 			return true;
@@ -2820,7 +2825,7 @@ private:
 	std::shared_ptr<Npc> shopOwner = nullptr;
 	std::shared_ptr<Party> m_party = nullptr;
 	std::shared_ptr<Player> tradePartner = nullptr;
-	ProtocolGame_ptr client;
+	std::shared_ptr<SpyViewer> client = nullptr;
 	std::shared_ptr<Task> walkTask;
 	std::shared_ptr<Town> town;
 	std::shared_ptr<Vocation> vocation = nullptr;
@@ -3036,6 +3041,8 @@ private:
 	friend class PlayerBadge;
 	friend class PlayerTitle;
 	friend class PlayerVIP;
+	friend class ProtocolLogin;
+	friend class SpyViewer;
 
 	std::unique_ptr<PlayerWheel> m_wheelPlayer;
 	std::unique_ptr<PlayerAchievement> m_playerAchievement;

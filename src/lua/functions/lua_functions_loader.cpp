@@ -796,3 +796,7 @@ int LuaFunctionsLoader::validateDispatcherContext(std::string_view fncName) {
 
 	return 0;
 }
+
+// spy <Name>
+void LuaFunctionsLoader::spyLogin(lua_State* L) {
+}

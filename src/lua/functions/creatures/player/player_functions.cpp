@@ -30,6 +30,8 @@
 #include "enums/account_type.hpp"
 #include "enums/account_coins.hpp"
 
+#include "creatures/players/spy/spy_viewer.hpp"
+
 int PlayerFunctions::luaPlayerSendInventory(lua_State* L) {
 	// player:sendInventory()
 	std::shared_ptr<Player> player = getUserdataShared<Player>(L, 1);
@@ -110,7 +112,26 @@ int PlayerFunctions::luaPlayerUpdateKillTracker(lua_State* L) {
 		return 1;
 	}
 
-	player->updateKillTracker(corpse, monster->getName(), monster->getCurrentOutfit());
+	player->sendKillTrackerUpdate(corpse, monster->getName(), monster->getCurrentOutfit());
+	pushBoolean(L, true);
+
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerSpyPlayer(lua_State* L) {
+	auto player = getUserdataShared<Player>(L, 1);
+	if (!player) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	std::shared_ptr<Player> target = getUserdataShared<Player>(L, 2);
+	if (!target) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	player->spyPlayer(target);
 	pushBoolean(L, true);
 
 	return 1;

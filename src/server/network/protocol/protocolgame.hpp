@@ -29,6 +29,7 @@ class ProtocolGame;
 class PreySlot;
 class TaskHuntingSlot;
 class TaskHuntingOption;
+class SpyViewer;
 
 struct ModalWindow;
 struct Achievement;
@@ -75,6 +76,10 @@ public:
 
 	uint16_t getVersion() const {
 		return version;
+	}
+
+	std::shared_ptr<Player> getPlayer() const {
+		return player;
 	}
 
 private:
@@ -149,7 +154,7 @@ private:
 
 	void parseBestiarysendRaces();
 	void parseBestiarysendCreatures(NetworkMessage &msg);
-	void BestiarysendCharms();
+	void sendBestiaryCharms();
 	void sendBestiaryEntryChanged(uint16_t raceid);
 	void refreshCyclopediaMonsterTracker(const std::unordered_set<std::shared_ptr<MonsterType>> &trackerSet, bool isBoss);
 	void sendTeamFinderList();
@@ -229,6 +234,13 @@ private:
 
 	// Imbuement info
 	void addImbuementInfo(NetworkMessage &msg, uint16_t imbuementId) const;
+
+	// Spy Viewer
+	void spyViewerLogin(const std::shared_ptr<Player> foundPlayer);
+	void sendSpyViewerAppear(std::shared_ptr<Player> foundPlayer);
+	void syncSpyViewerOpenContainers(std::shared_ptr<Player> foundPlayer);
+	void syncSpyViewerCloseContainers();
+	bool canWatchSpy(std::shared_ptr<Player> foundPlayer) const;
 
 	// Send functions
 	void sendChannelMessage(const std::string &author, const std::string &text, SpeakClasses type, uint16_t channel);
@@ -482,6 +494,7 @@ private:
 	friend class Player;
 	friend class PlayerWheel;
 	friend class PlayerVIP;
+	friend class SpyViewer;
 
 	std::unordered_set<uint32_t> knownCreatureSet;
 	std::shared_ptr<Player> player = nullptr;
@@ -502,6 +515,8 @@ private:
 	bool oldProtocol = false;
 
 	uint16_t otclientV8 = 0;
+
+	bool m_isCastViewer = false;
 
 	void sendInventory();
 	void sendOpenStash();

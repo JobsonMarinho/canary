@@ -168,6 +168,9 @@ bool Actions::registerLuaEvent(const std::shared_ptr<Action> action) {
 }
 
 ReturnValue Actions::canUse(std::shared_ptr<Player> player, const Position &pos) {
+	if (player->isAccessPlayer()) {
+		return RETURNVALUE_NOERROR;
+	}
 	if (pos.x != 0xFFFF) {
 		const Position &playerPos = player->getPosition();
 		if (playerPos.z != pos.z) {
@@ -182,6 +185,9 @@ ReturnValue Actions::canUse(std::shared_ptr<Player> player, const Position &pos)
 }
 
 ReturnValue Actions::canUse(std::shared_ptr<Player> player, const Position &pos, std::shared_ptr<Item> item) {
+	if (player->isAccessPlayer()) {
+		return RETURNVALUE_NOERROR;
+	}
 	const std::shared_ptr<Action> action = getAction(item);
 	if (action != nullptr) {
 		return action->canExecuteAction(player, pos);

@@ -22,11 +22,11 @@
  */
 
 #ifndef DEFAULT_NUMBER_OF_THREADS
-	#define DEFAULT_NUMBER_OF_THREADS 4
+	#define DEFAULT_NUMBER_OF_THREADS 8
 #endif
 
 ThreadPool::ThreadPool(Logger &logger) :
-	BS::thread_pool(std::max<int>(getNumberOfCores(), DEFAULT_NUMBER_OF_THREADS)), logger(logger) {
+	logger(logger), BS::thread_pool(std::max<int>(getNumberOfCores(), DEFAULT_NUMBER_OF_THREADS)) {
 	start();
 }
 

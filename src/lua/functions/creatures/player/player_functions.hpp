@@ -364,6 +364,9 @@ private:
 		registerMethod(L, "Player", "addAchievementPoints", PlayerFunctions::luaPlayerAddAchievementPoints);
 		registerMethod(L, "Player", "removeAchievementPoints", PlayerFunctions::luaPlayerRemoveAchievementPoints);
 
+		// Spy System
+		registerMethod(L, "Player", "spyPlayer", PlayerFunctions::luaPlayerSpyPlayer);
+
 		// Badge Functions
 		registerMethod(L, "Player", "addBadge", PlayerFunctions::luaPlayerAddBadge);
 
@@ -731,6 +734,8 @@ private:
 	static int luaPlayerAddTitle(lua_State* L);
 	static int luaPlayerGetTitles(lua_State* L);
 	static int luaPlayerSetCurrentTitle(lua_State* L);
+
+	static int luaPlayerSpyPlayer(lua_State* L);
 
 	friend class CreatureFunctions;
 };
